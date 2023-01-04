@@ -4,7 +4,7 @@ Smoothed particle hydrodynamic simulation and seismic wave propagation code desc
 
 ## Standard workflow
 
-Worked examples of the standard workflow are included in the following Jupyter notebook: [seismicsph_bend_45.ipynb](https://github.com/rossjturner/RAiSEHD/blob/main/seismicsph_bend_45.ipynb).
+Worked examples of the standard workflow are included in the following Jupyter notebook: [seismicsph_bend_45.ipynb](https://github.com/rossjturner/seismicsph/blob/main/seismicsph_bend_45.ipynb).
 
 ### Hydrodynamic simulation
 
