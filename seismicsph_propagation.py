@@ -252,7 +252,7 @@ def initial_displacement(time, incident, alpha, zeta, velocity, fluid_density, t
     #density = ice_density(temperature)
 
     # calculate the initial acceleration at the impact site
-    displacement_vector = np.array(0., dtype=complex)
+    displacement_vector = np.array(0.*zeta, dtype=complex)
     displacement_vector.imag = -tau/np.pi
     displacement_vector = displacement_vector*(velocity*np.exp(-alpha*(time - incident))*np.exp(1j*np.pi/tau*(time - incident)))
     # multiply by 1000/916 afterwards, or whatever the density ratio is
@@ -268,7 +268,7 @@ def initial_velocity(time, incident, alpha, zeta, velocity, fluid_density, tau, 
     #density = ice_density(temperature)
 
     # calculate the initial acceleration at the impact site
-    velocity_vector = np.array(1., dtype=complex)
+    velocity_vector = np.array(1. + 0.*zeta, dtype=complex)
     velocity_vector.imag = zeta/np.sqrt(1 - zeta**2)
     velocity_vector = velocity_vector*(velocity*np.exp(-alpha*(time - incident))*np.exp(1j*np.pi/tau*(time - incident)))
     # multiply by 1000/916 afterwards, or whatever the density ratio is
