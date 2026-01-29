@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 from matplotlib import rc
+from itertools import product
 
 from pysph.base.kernels import WendlandQuintic
 from pysph.examples._db_geometry import DamBreak3DGeometry
@@ -208,16 +209,6 @@ def seismic_sph_interactions(filename=None, delta=0.01, dx=0.01, dy=0.01, dz=0.0
         f.create_dataset('fy', data=fy_vector)
         f.create_dataset('fz', data=fz_vector)
     
-    # create pandas dataframe to output data
-    #collision_df = pd.DataFrame(columns=['t', 'x', 'y', 'z', 'fx', 'fy', 'fz'])
-    #collision_df['t'] = t_vector
-    #collision_df['x'] = x_vector
-    #collision_df['y'] = y_vector
-    #collision_df['z'] = z_vector
-    #collision_df['fx'] = fx_vector
-    #collision_df['fy'] = fy_vector
-    #collision_df['fz'] = fz_vector
-    
     return None
 
 # Define function to extract output time steps
@@ -329,9 +320,11 @@ def __seismic_sph_interfaces(boundary_vector, obstacle_vector, delta=0.01):
     loc_tuple = set(map(tuple, loc_vector))
         
     # determine positions of potential neighbours
-    neighbour_offsets_3 = np.array([p for p in product(vals, repeat=3) if p != (0,0,0)], dtype=int) # 3x3x3 cube, missing centre
-    neighbour_offsets_5 = np.array([p for p in product(vals, repeat=3) if p != (0,0,0)], dtype=int) # 5x5x5 cube, missing centre
-    neighbour_index = np.zeros((len(neighbour_offsets), len(x_slice)), dtype=bool)
+    vals_3 = [-1, 0, 1]
+    vals_5 = [-2, -1, 0, 1, 2]
+    neighbour_offsets_3 = np.array([p for p in product(vals_3, repeat=3) if p != (0,0,0)], dtype=int) # 3x3x3 cube, missing centre
+    neighbour_offsets_5 = np.array([p for p in product(vals_5, repeat=3) if p != (0,0,0)], dtype=int) # 5x5x5 cube, missing centre
+    neighbour_index = np.zeros((len(neighbour_offsets_3), len(x_slice)), dtype=bool)
     
     # check if each neighbour exists for set of offsets
     for i in range(0, len(neighbour_offsets_3)):
@@ -342,7 +335,7 @@ def __seismic_sph_interfaces(boundary_vector, obstacle_vector, delta=0.01):
     x_min, x_max = np.min(x_slice), np.max(x_slice)
     y_min, y_max = np.min(y_slice), np.max(y_slice)
     z_min, z_max = np.min(z_slice), np.max(z_slice)
-    internal_index = ( (x_min < x_slice) & (x_slice < x_max) & (y_min < y_slice) & (y_slice < ymax) & (z_min < z_slice) & (z_slice < zmax) )
+    internal_index = ( (x_min < x_slice) & (x_slice < x_max) & (y_min < y_slice) & (y_slice < y_max) & (z_min < z_slice) & (z_slice < z_max) )
 
     # find boundary/obstacle particles on the interface (and internal to the simulation)
     interface_index = np.logical_and(np.logical_not(np.all(neighbour_index, axis=0)), internal_index)
@@ -380,7 +373,7 @@ def __seismic_sph_interactions(time_vector, iter_vector, boundary_vector, obstac
 
         # find pressure and force vector of boundary/obstacle particle
         p_slice = np.concatenate([boundary_vector[i].p, obstacle_vector[i].p])[interface_index]
-        f_slice = p_slice * normals * effective_area
+        f_slice = p_slice[:, None] * normals * effective_area[:, None]
         
         # define bounds of coarse(r) cartesian grid
         min_x, max_x = int((np.min(x_slice) + dx/2)//dx), int((np.max(x_slice) + dx/2)//dx)
