@@ -1,5 +1,5 @@
 # seismic_sph module
-# Ross Turner, 27 January 2026
+# Ross Turner, 8 February 2026
 
 # import packages
 import os, h5py
@@ -8,13 +8,13 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from matplotlib import rc
 from itertools import product
+from scipy.signal import butter, filtfilt
 
 from pysph.base.kernels import WendlandQuintic
 from pysph.examples._db_geometry import DamBreak3DGeometry
 from pysph.solver.application import Application
 from pysph.sph.integrator import EPECIntegrator
 from pysph.sph.scheme import WCSPHScheme
-
 from pysph.solver.utils import load
 
 import pyprop8 as pp
@@ -31,11 +31,9 @@ alpha = 0.25
 beta = 0.0
 c0 = 10.0 * np.sqrt(2.0 * 9.81 * 0.55) #1400.
 
-# fixed parameter used in bisection method to find location and normal vector to interface
-tol = 1e-5
-pert = 1e-3 # must be much greater than tolerance
+# numerical tolerance parameters
+tol = 1e-9
 buff = 30
-kernel_frac = 0.8
 
 
 ## Define functions to print coloured messages
@@ -359,7 +357,7 @@ def __seismic_sph_interfaces(boundary_vector, obstacle_vector, delta=0.01):
 
 
 # Define function to find particles that will collide with water--ice interfaces
-def __seismic_sph_interactions(time_vector, iter_vector, boundary_vector, obstacle_vector, interface_index, normals, effective_area, filename=None, gx=0, gy=0, gz=0, dx=0.01, dy=0.01, dz=0.01):
+def __seismic_sph_interactions(time_vector, iter_vector, boundary_vector, obstacle_vector, interface_index, normals, effective_area, filename=None, dx=0.01, dy=0.01, dz=0.01):
     # define vectors to store collision data
     t_vector, x_vector, y_vector, z_vector, fx_vector, fy_vector, fz_vector = [], [], [], [], [], [], []
     
@@ -414,15 +412,22 @@ def __seismic_sph_interactions(time_vector, iter_vector, boundary_vector, obstac
 
 
 ## Define functions to find force vectors for particle collisions; all inputs in SI units, z0 is a depth
-def seismic_sph_forces(x0, y0, z0, filename=None, dx=0.1, dy=0.1, dz=0.1, dt=1/1000., average_height=False, crit_force=1e-6):
+def seismic_sph_forces(x0, y0, z0, filename=None, dx=0.1, dy=0.1, dz=0.1, slow_frequency=1., average_height=False, crit_force=1e-6):
+    # define vectors to store collision data
+    t_vector, x_vector, y_vector, z_vector, fx_vector, fy_vector, fz_vector = [], [], [], [], [], [], []
+    
     # read particle interaction datafile
     with h5py.File(filename+'_interactions.hdf5', 'r') as f:
         t_h5 = f['t'][:]
         x_h5 = f['x'][:]
         y_h5 = f['y'][:]
         z_h5 = f['z'][:]
-        fx_h5 = f['fx'][:]
-        fy_h5 = f['fy'][:]
+        try:
+            fx_h5 = f['fx'][:]
+            fy_h5 = f['fy'][:]
+        except:
+            # simulation used for gravity loading
+            fx_h5, fy_h5 = 0*f['fz'][:], 0*f['fz'][:]
         fz_h5 = f['fz'][:]
 
     # calculate the maximum and cut-off force for the interactions
@@ -430,43 +435,83 @@ def seismic_sph_forces(x0, y0, z0, filename=None, dx=0.1, dy=0.1, dz=0.1, dt=1/1
     crit_index = f_h5 > crit_force*np.max(f_h5)
     
     # define reduced set of times, locations and forces
-    t_vector = t_h5[crit_index]
-    x_vector, y_vector, z_vector = x_h5[crit_index], y_h5[crit_index], z_h5[crit_index]
-    fx_vector, fy_vector, fz_vector = fx_h5[crit_index], fy_h5[crit_index], fz_h5[crit_index]
-    f_vector = f_h5[crit_index]
+    t_slice = t_h5[crit_index]
+    x_slice, y_slice, z_slice = x_h5[crit_index], y_h5[crit_index], z_h5[crit_index]
+    fx_slice, fy_slice, fz_slice = fx_h5[crit_index], fy_h5[crit_index], fz_h5[crit_index]
+    f_slice = f_h5[crit_index]
     
-    # add each collision to a cartesian grid to minimise number of calculations
-    loc_vector = []
-    index_vector = np.zeros_like(t_vector, dtype='int')
-    height, weight = 0., 0.
-    for i in range(0, len(t_vector)):
-        loc = [(x_vector[i] + dx/2)//dx * dx, (y_vector[i] + dy/2)//dy * dy, (z_vector[i] + dz/2)//dz * dz]
-        # find index of grid location and add to array if not present
-        if loc in loc_vector:
-            idx = [z for z in loc_vector].index(loc)
+    # find unique times for interactions
+    t_unique = np.unique(t_slice)
+    # find time spacing (excluding any odd outputs)
+    dt = np.median(np.diff(t_unique))
+    t_unique = np.unique(np.rint(t_slice / dt) * dt)
+    
+    # define bounds of coarse(r) cartesian grid (similar to previous function)
+    min_x, max_x = int((np.min(x_slice) + dx/2 - x0)//dx), int((np.max(x_slice) + dx/2 - x0)//dx)
+    min_y, max_y = int((np.min(y_slice) + dy/2 - y0)//dy), int((np.max(y_slice) + dy/2 - y0)//dy)
+    if average_height == True:
+        min_z, max_z = 0, 0
+    else:
+        min_z, max_z = int((np.min(z_slice) + dz/2 - z0)//dz), int((np.max(z_slice) + dz/2 - z0)//dz)
+    
+    # define grid of force vectors
+    fx_grid = np.zeros((len(t_unique), max_x - min_x + 1, max_y - min_y + 1, max_z - min_z + 1))
+    fy_grid = np.zeros((len(t_unique), max_x - min_x + 1, max_y - min_y + 1, max_z - min_z + 1))
+    fz_grid = np.zeros((len(t_unique), max_x - min_x + 1, max_y - min_y + 1, max_z - min_z + 1))
+    
+    # add forces to appropriate grid point
+    for i in range(0, len(t_unique)):
+        # find indices (as a mask) with the correct time step
+        time_index = np.abs(t_slice - t_unique[i]) < tol
+    
+        if np.sum(time_index) > 0:
+            # add each force vector to a cartesian grid
+            x_index = ((x_slice[time_index] + dx/2 - x0)//dx - min_x).astype(int)
+            y_index = ((y_slice[time_index] + dy/2 - y0)//dy - min_y).astype(int)
             if average_height == True:
-                height = height + z_vector[i]*f_vector[i]
-                weight = weight + f_vector[i]
-        else:
-            loc_vector.append(loc)
-            if height == True:
-                height = height + z_vector[i]*f_vector[i]
-                weight = weight + f_vector[i]
-            idx = len(loc_vector) - 1
-
-        # add index of non-zero element to array
-        index_vector[i] = idx
-    loc_vector = np.array(loc_vector)
-
+                z_index = 0
+            else:
+                z_index = ((z_slice[time_index] + dz/2 - z0)//dz - min_z).astype(int)
+            np.add.at(fx_grid, (i, x_index, y_index, z_index), fx_slice[time_index])
+            np.add.at(fy_grid, (i, x_index, y_index, z_index), fy_slice[time_index])
+            np.add.at(fz_grid, (i, x_index, y_index, z_index), fz_slice[time_index])
+            if (np.sum(fx_slice) == 0 and np.sum(fy_slice) == 0):
+                fz_grid[i,:,:,:] = fz_grid[i,:,:,:] - fz_grid[0,:,:,:]
+        
+    # define (and apply) second-order Butterworth filter to remove slow-varying signal
+    b, a = butter(2, slow_frequency / (0.5 * (1. / dt)), btype='high')
+    fx_detrended = filtfilt(b, a, fx_grid, axis=0)
+    fy_detrended = filtfilt(b, a, fy_grid, axis=0)
+    fz_detrended = filtfilt(b, a, fz_grid, axis=0)
+    
+    # add non-zero grid points to vector outputs
+    f_detrended = np.sqrt(fx_detrended**2 + fy_detrended**2 + fz_detrended**2)
+    f_crit = crit_force*np.max(f_detrended)
+    for i in range(0, len(t_unique)):
+        # find unique non-zero locations in grid
+        x_unique, y_unique, z_unique = np.nonzero(np.abs(f_detrended[i,:,:,:]) > f_crit)
+        
+        # add grid locations and forces to output lists
+        if len(x_unique) > 0:
+            t_vector.extend([t_unique[i]] * len(x_unique))
+            x_vector.extend((x_unique + min_x) * dx)
+            y_vector.extend((y_unique + min_y) * dy)
+            z_vector.extend((z_unique + min_z) * dz)
+            fx_vector.extend(fx_detrended[i, x_unique, y_unique, z_unique])
+            fy_vector.extend(fy_detrended[i, x_unique, y_unique, z_unique])
+            fz_vector.extend(fz_detrended[i, x_unique, y_unique, z_unique])
+            
     # create pandas dataframe to output data
     forces_df = pd.DataFrame(columns=['t', 'loc_1', 'loc_2', 'loc_3', 'force_1', 'force_2', 'force_3'])
-    forces_df['t'] = (np.array(t_vector) + dt/2)//dt * dt
-    forces_df['loc_1'] = loc_vector[index_vector, 0] - x0
-    forces_df['loc_2'] = loc_vector[index_vector, 1] - y0
+    forces_df['t'] = np.array(t_vector)
+    forces_df['loc_1'] = np.array(x_vector)
+    forces_df['loc_2'] = np.array(y_vector)
     if average_height == True:
-        forces_df['loc_3'] = height/weight - z0
+        # calculate force-weighted average height
+        weight = np.sqrt(np.array(fx_vector)**2 + np.array(fy_vector)**2 + np.array(fz_vector)**2)
+        forces_df['loc_3'] = np.sum(weight * np.array(z_vector))/np.sum(weight) - z0
     else:
-        forces_df['loc_3'] = loc_vector[index_vector, 2] - z0
+        forces_df['loc_3'] = np.array(z_vector)
     forces_df['force_1'] = np.array(fx_vector)
     forces_df['force_2'] = np.array(fy_vector)
     forces_df['force_3'] = np.array(fz_vector)
@@ -475,12 +520,12 @@ def seismic_sph_forces(x0, y0, z0, filename=None, dx=0.1, dy=0.1, dz=0.1, dt=1/1
 
 
 ## Define functions to calculate synthetic seismic signals using pyprop8; all inputs in SI units, z is a depth
-def seismic_signals(x, y, z, earth_model=None, forces_df=None, filename=None, duration=10., sampling_rate=200., dt=1/1000., spec=True):
+def seismic_signals(x, y, z, earth_model=None, forces_df=None, filename=None, duration=10., sampling_rate=200., spec=True):
     # read collision datafile if not passed as an input
     if not isinstance(forces_df, pd.DataFrame):
         forces_df = pd.read_csv(filename+'.csv', sep=',', index_col=0)
-    time_vector, x_vector, y_vector, z_vector = forces_df['t'].values, forces_df['loc_1'].values, forces_df['loc_2'].values, -forces_df['loc_3'].values
-    f1_vector, f2_vector, f3_vector = forces_df['force_1'].values, forces_df['force_2'].values, forces_df['force_3'].values
+    time_vector, x_vector, y_vector, z_vector = forces_df['t'].values, forces_df['loc_1'].values, forces_df['loc_2'].values, -forces_df['loc_3'].values # z-coordinate is depth (need to flip); the force is in cartesian oriented sensibly
+    f1_vector, f2_vector, f3_vector = -forces_df['force_1'].values, -forces_df['force_2'].values, -forces_df['force_3'].values # input forces are normal response of medium (need to flip)
     
     # create Earth layer model if none passed in
     if earth_model == None:
@@ -503,11 +548,14 @@ def seismic_signals(x, y, z, earth_model=None, forces_df=None, filename=None, du
             loc_vector.append(loc)
             index_vector[i] = len(loc_vector) - 1
     loc_vector = np.array(loc_vector)
-            
+
     # define receiver locations
     receivers = pp.ListOfReceivers((x - loc_vector[:,0])/1000., (y - loc_vector[:,1])/1000., z/1000.)
                     # correction to seismometer locations
                     
+    # find time spacing (excluding any odd outputs)
+    dt = np.median(np.diff(np.unique(time_vector)))
+    dt_bin = int(1./(sampling_rate*dt) + 0.5) # number of simulation bins per sample (integer; work required for non-integer ratios)
     # sampling in time and frequency
     nt = int(duration*sampling_rate) # number of time-series points
     freqs = 10**np.arange(-1, 3 + 1e-9, 0.01)
@@ -524,9 +572,9 @@ def seismic_signals(x, y, z, earth_model=None, forces_df=None, filename=None, du
         else:
             F = np.array([[0], [0], [1e-9]])
         
-        for j in range(0, int(1./(sampling_rate*dt))):
+        for j in range(0, dt_bin):
             # create source object
-            source = pp.PointSource(0., 0., z_vector[0]/1000., M, F, j*dt)
+            source = pp.PointSource(0., 0., z_vector[0]/1000., M, F, j*(1./sampling_rate)/dt_bin)
 
             # create discplacement waveforms (and derivatives) at the location of each seismometer
             times, seismogram, derivative = pp.compute_seismograms(earth_model, source, receivers, nt, 1./sampling_rate, derivatives=pp.DerivativeSwitches(time=True), squeeze_outputs=False, show_progress=False)
@@ -538,42 +586,13 @@ def seismic_signals(x, y, z, earth_model=None, forces_df=None, filename=None, du
                 spectrum = pp.compute_spectra(earth_model, source, receivers, 2*np.pi*freqs, squeeze_outputs=False, show_progress=False)
                 spectra.append(spectrum)
 
-    # find appropriate time bin and shift in samples
-    time_bin = (time_vector % (1./(sampling_rate)) / dt).astype(int)
-    time_shift = (time_vector // (1./(sampling_rate))).astype(int)
-
-    # create data structures for output seismograms and spectra
-    nsamples = len(np.array(seismograms)[0,0,0,0,:])
-    displacements = np.zeros((3, nsamples))
-    velocities = np.zeros((3, nsamples))
-    if spec:
-        velocity_spectra = np.zeros((3, len(freqs)), dtype=complex)
-
-    for i in range(0, len(time_vector)):
-        # add x, y and z-components of force to seismogram; force is in Newtons
-        displacements[:,time_shift[i]:] = displacements[:,time_shift[i]:] \
-                        + f1_vector[i]*np.array(seismograms)[time_bin[i], 0, \
-                                                            index_vector[i], :, 0:nsamples-time_shift[i]] \
-                        + f2_vector[i]*np.array(seismograms)[time_bin[i] + int(1./(sampling_rate*dt)), 0, \
-                                                            index_vector[i], :, 0:nsamples-time_shift[i]] \
-                        + f3_vector[i]*np.array(seismograms)[time_bin[i] + 2*int(1./(sampling_rate*dt)), 0, \
-                                                            index_vector[i], :, 0:nsamples-time_shift[i]]
-        velocities[:,time_shift[i]:] = velocities[:,time_shift[i]:] \
-                        + f1_vector[i]*np.array(derivatives)[time_bin[i], 0, \
-                                                            index_vector[i], 0, :, 0:nsamples-time_shift[i]] \
-                        + f2_vector[i]*np.array(derivatives)[time_bin[i] + int(1./(sampling_rate*dt)), 0, \
-                                                            index_vector[i], 0, :, 0:nsamples-time_shift[i]] \
-                        + f3_vector[i]*np.array(derivatives)[time_bin[i] + 2*int(1./(sampling_rate*dt)), 0, \
-                                                            index_vector[i], 0, :, 0:nsamples-time_shift[i]]
-
-        # add x, y and z-components of force to spectrum; force is in Newtons
-        if spec:
-            velocity_spectra[:,:] = velocity_spectra[:,:] \
-                            + f1_vector[i]*np.array(spectra)[time_bin[i], 0, index_vector[i], :, :] \
-                            + f2_vector[i]*np.array(spectra)[time_bin[i] + int(1./(sampling_rate*dt)), 0, \
-                                                                index_vector[i], :, :] \
-                            + f3_vector[i]*np.array(spectra)[time_bin[i] + 2*int(1./(sampling_rate*dt)), 0, \
-                                                                index_vector[i], :, :]
+    # convert lists to arrays
+    seismograms = np.asarray(seismograms)
+    derivatives = np.asarray(derivatives)
+    spectra = np.asarray(spectra)
+    
+    # appy time shifts and weight seimograms/spectra by forces
+    displacements, velocities, velocity_spectra = __time_shifter(time_vector, f1_vector, f2_vector, f3_vector, index_vector, seismograms, derivatives, spectra, sampling_rate, dt, spec, freqs)
 
     # create pandas dataframe to output data
     seismogram_df = pd.DataFrame(columns=['t', 'disp_1', 'disp_2', 'disp_3', 'vel_1', 'vel_2', 'vel_3'])
@@ -587,7 +606,50 @@ def seismic_signals(x, y, z, earth_model=None, forces_df=None, filename=None, du
         return seismogram_df, spectra_df
     else:
         return seismogram_df
+
+
+# Define function to appy time shifts and weight seimograms/spectra by forces
+def __time_shifter(time_vector, f1_vector, f2_vector, f3_vector, index_vector, seismograms, derivatives, spectra, sampling_rate, dt, spec, freqs):
+
+    # find appropriate time bin and shift in samples
+    dt_bin = int(1./(sampling_rate*dt) + 0.5)
+    time_shift = np.floor((time_vector + dt/2) * sampling_rate).astype(int)
+    time_bin = np.clip(np.floor((time_vector + dt/2 - time_shift / sampling_rate) / dt).astype(int), 0, dt_bin - 1)
+
+    # create data structures for output seismograms and spectra
+    nsamples = seismograms.shape[-1]
+    displacements = np.zeros((3, nsamples))
+    velocities = np.zeros((3, nsamples))
+    velocity_spectra = np.zeros((3, len(freqs)), dtype=complex)
     
+    for i in range(0, len(time_vector)):
+        # add x, y and z-components of force to seismogram; force is in Newtons (strictly N/s/m^3; volume is handled through grid and time through bin width)
+        displacements[:,time_shift[i]:] = displacements[:,time_shift[i]:] \
+                        + f1_vector[i] * dt * seismograms[time_bin[i], 0, \
+                                                            index_vector[i], :, 0:nsamples-time_shift[i]] \
+                        + f2_vector[i] * dt * seismograms[time_bin[i] + dt_bin, 0, \
+                                                            index_vector[i], :, 0:nsamples-time_shift[i]] \
+                        + f3_vector[i] * dt * seismograms[time_bin[i] + 2*dt_bin, 0, \
+                                                            index_vector[i], :, 0:nsamples-time_shift[i]]
+        velocities[:,time_shift[i]:] = velocities[:,time_shift[i]:] \
+                        + f1_vector[i] * dt * derivatives[time_bin[i], 0, \
+                                                            index_vector[i], 0, :, 0:nsamples-time_shift[i]] \
+                        + f2_vector[i] * dt * derivatives[time_bin[i] + dt_bin, 0, \
+                                                            index_vector[i], 0, :, 0:nsamples-time_shift[i]] \
+                        + f3_vector[i] * dt * derivatives[time_bin[i] + 2*dt_bin, 0, \
+                                                            index_vector[i], 0, :, 0:nsamples-time_shift[i]]
+
+        # add x, y and z-components of force to spectrum; force is in Newtons (strictly N/s/m^3; volume is handled through grid and time through bin width)
+        if spec:
+            velocity_spectra[:,:] = velocity_spectra[:,:] \
+                            + f1_vector[i] * dt * spectra[time_bin[i], 0, index_vector[i], :, :] \
+                            + f2_vector[i] * dt * spectra[time_bin[i] + dt_bin, 0, index_vector[i], :, :] \
+                            + f3_vector[i] * dt * spectra[time_bin[i] + 2*dt_bin, 0, index_vector[i], :, :]
+    
+    return displacements, velocities, velocity_spectra
+
+
 # Define function to specify earth/ice layer model; all inputs in SI units, array of layers each with element: (z_top, v_p, v_s, rho)
 def earth_model(layers):
     return pp.LayeredStructureModel(np.array(layers)/1000., interface_depth_form=True)
+
