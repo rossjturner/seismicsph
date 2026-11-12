@@ -1,6 +1,6 @@
 # hyglac
 
-Hyglac [`hyglac.py`](hyglac.py) is a Python package for smoothed particle hydrodynamic simulations, calculation of dynamic pressure forces at fluid–solid interfaces, and seismic wave propagation, as described by Turner et al. (2026), in press. These three components can be used independently to simulate fluid flows, extract time-dependent forces from existing hydrodynamic simulations, or calculate synthetic seismic waveforms from prescribed force distributions.
+Hyglac ([`hyglac.py`](hyglac.py)) is a Python package for smoothed particle hydrodynamic simulations, calculation of dynamic pressure forces at fluid–solid interfaces, and seismic wave propagation, as described by Turner et al. (2026), in press. These three components can be used independently to simulate fluid flows, extract time-dependent forces from existing hydrodynamic simulations, or calculate synthetic seismic waveforms from prescribed force distributions.
 
 ## Standard workflow
 
