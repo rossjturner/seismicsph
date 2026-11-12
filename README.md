@@ -5,7 +5,7 @@ Hyglac is a Python package for smoothed particle hydrodynamic simulations, calcu
 
 ## Standard workflow
 
-Worked examples of the standard workflow for the five channel geometries considered by Turner et al. (2026) are included in the corresponding Jupyter notebooks in this repository.
+Worked examples of the standard workflow for the four channel geometries and dam-break validation case considered by Turner et al. (2026) are included in the corresponding Jupyter notebooks in this repository.
 
 ### Hydrodynamic simulation
 
