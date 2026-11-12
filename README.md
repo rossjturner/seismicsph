@@ -1,6 +1,6 @@
 # seismicsph
 
-Smoothed particle hydrodynamic simulation and seismic wave propagation code described by Turner et al. (2023), in press.
+Smoothed particle hydrodynamic simulation and seismic wave propagation code described by Turner et al. (2026), in press.
 
 ## Standard workflow
 
