@@ -1,23 +1,26 @@
+
 # hyglac
 
-Smoothed particle hydrodynamic simulation and seismic wave propagation code described by Turner et al. (2026), in press.
+Hyglac is a Python package for smoothed particle hydrodynamic simulations, calculation of dynamic pressure forces at fluid–solid interfaces, and seismic wave propagation, as described by Turner et al. (2026), in press. These three components can be used independently to simulate fluid flows, extract time-dependent forces from existing hydrodynamic simulations, or calculate synthetic seismic waveforms from prescribed force distributions.
 
 ## Standard workflow
 
-Worked examples of the standard workflow are included in the following Jupyter notebook: [seismicsph_bend_45.ipynb](https://github.com/rossjturner/seismicsph/blob/main/seismicsph_bend_45.ipynb).
+Worked examples of the standard workflow for the five channel geometries considered by Turner et al. (2026) are included in the corresponding Jupyter notebooks in this repository.
 
 ### Hydrodynamic simulation
 
-The first step in the workflow is to run a hydrodyanic simulation for the relevant channel geometry. This is acheived using the _run_seismic_sph_ function in the _seismicsph_collisions.py_ module, but an existing hydrodynamic simulation can be used. Regions in the computational domain to be occupied by ice (boundary) particles must be specified in either case, and the inital location of fluid particles specifed in the former case. See the worked example for the expected form of these functions.
+The first step in the workflow is to run a hydrodynamic simulation for the relevant channel geometry. This is achieved using the *run_seismic_sph* function in the *hyglac.py* module, but an existing hydrodynamic simulation can be used. Regions in the computational domain to be occupied by ice (boundary) particles and the initial location of fluid particles must be specified. See the worked examples for the expected form of these functions.
 
-### Collision catalogue
+### Dynamic pressure calculation
 
-The second step would in practice be run as part of the previous step, but can be run in isolation using the outputs of an existing smoothed particle hydrodynamical simualtion (the function will likely require minor modifcations to handle different simulation output formats). The _seismic_sph_collisions_ function in the _seismicsph_collisions.py_ module identifies fluid particle collisions with the ice boundary using the impulse capturing method of Turner et al. (2023), returning a _pandas_ dataframe. The outputs from this function for the four channel geometries considered by Turner et al. (2023) are included in the _collisions_ folder to permit calculation of seismic waves for these flows.
+The second step would in practice be run after the previous step, but can be run in isolation using the outputs of an existing smoothed particle hydrodynamical simulation (the function will likely require minor modifications to handle different simulation output formats). The *seismic_sph_interactions* function in the *hyglac.py* module identifies the water–ice interface and calculates the dynamic pressure acting on the ice boundary from the fluid particle pressures, using spatial averaging to reduce numerical fluctuations. The pressure is combined with the effective surface areas and unit normals of the interface particles to calculate the three components of the force acting on the ice. The outputs are saved to an HDF5 file for subsequent calculation of seismic waves.
 
-### Wave propagation
+### Seismic wave propagation
 
-The final step in the workflow is the generation of seismic waves from the collision catalogues. The location of a mock seismometer relative to the computational domain must be specified, in addition to the sample rate and type of waveform (e.g. acceleration or velocity). The _icewater_collisions_ function in the _seismicsph_propagation.py_ module generates a three-component waveform with separated P- and S-wave signals, returning a _pandas_ dataframe. This function can be run for a range of seismometer locations around the channel to generate the suite of figures presented in Turner et al. (2023). The _icewater_waveforms_ function is included to provide a basic plot of the synthetic waveform data for a single seismometer location.
+The final step in the workflow is the generation of seismic waves from the interaction data calculated in the previous step. The *seismic_sph_forces* function in the *hyglac.py* module combines the forces on a coarser spatial grid for computational efficiency, returning a *pandas* dataframe. The *seismic_sph_forces_defaults* function applies the settings used in Turner et al. (2026), including the exclusion of the vertical force component.
+
+The location of a mock seismometer relative to the computational domain must be specified, in addition to the sample rate, duration and seismic velocity structure. The *earth_model* function defines the layered seismic velocity structure, while the *seismic_signals* function uses *pyprop8* to generate three-component displacement and velocity waveforms, returning a *pandas* dataframe. This function can be run for a range of seismometer locations around the channel to generate the suite of figures presented in Turner et al. (2026).
 
 ## Contact
 
-Ross Turner <<turner.rj@icloud.com>>
+Ross Turner <turner.rj@icloud.com>
