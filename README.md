@@ -22,7 +22,7 @@ The location of a mock seismometer relative to the computational domain must be 
 
 ## Verification test
 
-The [`seismicsph_testcase.ipynb`](testcase/seismicsph_testcase.ipynb) notebook demonstrates the complete workflow and provides a computationally inexpensive test to verify that the code runs as expected. The simulation parameters are chosen to minimise runtime and output file sizes, allowing reference outputs to be included in the [`testcase/`](testcase/) directory for comparison. These parameters are not intended to be physically realistic, and the resulting outputs should not be interpreted as scientifically validated predictions.
+The [`seismicsph_testcase.ipynb`](verification_test/seismicsph_testcase.ipynb) notebook demonstrates the complete workflow and provides a computationally inexpensive test to verify that the code runs as expected. The simulation parameters are chosen to minimise runtime and output file sizes, allowing reference outputs to be included in the [`verification_test/`](verification_test/) directory for comparison. These parameters are not intended to be physically realistic, and the resulting outputs should not be interpreted as scientifically validated predictions.
 
 ## Contact
 
