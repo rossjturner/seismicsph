@@ -1,4 +1,4 @@
-# seismic_sph module
+# hyglac module
 # Ross Turner, 25 March 2026
 
 # import packages
