@@ -1,5 +1,5 @@
 # seismic_sph module
-# Ross Turner, 8 February 2026
+# Ross Turner, 25 March 2026
 
 # import packages
 import os, h5py
@@ -61,7 +61,14 @@ def fastload(path):
         return load(path)
     else:
         with h5py.File(path, 'r') as f:
-            arrays = {k: LiteArray(f['particles'][k]['arrays']) for k in f['particles']}
+            arrays = {}
+            for k in f['particles']:
+                group = f['particles'][k]['arrays']
+                # Load each sub-array if array is a group
+                if isinstance(group, h5py.Group):
+                    arrays[k] = LiteArray({key: group[key][()] for key in group.keys()})
+                else:
+                    arrays[k] = LiteArray(group[()])
             solver_data = {}
             if 'solver_data' in f and 't' in f['solver_data']: # this path has not been checked
                 solver_data['t'] = f['solver_data']['t'][()]
@@ -74,6 +81,7 @@ class LiteArray:
         self.y = g['y'][:]
         self.z = g['z'][:]
         self.h = g['h'][:]
+        self.rho = g['rho'][:]
         self.p = g['p'][:] if 'p' in g else None
 
 
@@ -212,7 +220,7 @@ def plot_seismic_sph(x, y, z, step, particle_type='fluid', filename=None):
 
 
 ## Define functions to find impulse on boundary/obstacle particles due to interactions with water--ice interface
-def seismic_sph_interactions(filename=None, delta=0.01, dx=0.05, dy=0.05, dz=0.05, xrange=[-1,1], yrange=None, zrange=None, boundary_layer=False):
+def seismic_sph_interactions(filename=None, delta=0.01, dx=0.05, dy=0.05, dz=0.05, xrange=[4,6], yrange=None, zrange=None, boundary_layer=False):
     # read in time and fluid properties from file
     time_vector, iter_vector = __seismic_sph_times(filename=filename)
     fluid_vector, boundary_vector, obstacle_vector = __seismic_sph_particles(time_vector, iter_vector, [], [], [], filename=filename, start=0, buffer=buff)
@@ -224,7 +232,7 @@ def seismic_sph_interactions(filename=None, delta=0.01, dx=0.05, dy=0.05, dz=0.0
     t_vector, x_vector, y_vector, z_vector, fx_vector, fy_vector, fz_vector = __seismic_sph_interactions(time_vector, iter_vector, fluid_vector, boundary_vector, obstacle_vector, interface_index, normals, effective_area, filename=filename, dx=dx, dy=dy, dz=dz, xrange=xrange, yrange=yrange, zrange=zrange, boundary_layer=boundary_layer)
     
     # create hdf5 dataframe to output data
-    with h5py.File(filename+'_interactions__.hdf5', 'w') as f:
+    with h5py.File(filename+'_interactions.hdf5', 'w') as f:
         f.create_dataset('t', data=t_vector)
         f.create_dataset('x', data=x_vector)
         f.create_dataset('y', data=y_vector)
@@ -320,15 +328,9 @@ def __seismic_sph_particles(time_vector, iter_vector, fluid_vector, boundary_vec
     # read-in data file at specified time step
     for i in range(start, min(len(time_vector), start + buffer)):
         if filename == None:
-            try:
-                data = fastload('seismic_sph_output/seismic_sph_'+'{:.0f}'.format(iter_vector[i])+'.hdf5')
-            except:
-                data = fastload('seismic_sph_output/seismic_sph_'+'{:.0f}'.format(iter_vector[i])+'.npz')
+            data = fastload('seismic_sph_output/seismic_sph_'+'{:.0f}'.format(iter_vector[i])+'.hdf5')
         else:
-            #try:
             data = fastload(filename+'_output/'+filename+'_'+'{:.0f}'.format(iter_vector[i])+'.hdf5')
-            #except:
-            #    data = fastload(filename+'_output/'+filename+'_'+'{:.0f}'.format(iter_vector[i])+'.npz')
         
         # store fluid particle properties in datafile
         fluid_vector.append(data['arrays']['fluid'])
@@ -375,9 +377,9 @@ def __seismic_sph_interfaces(boundary_vector, obstacle_vector, delta=0.01, xrang
     internal_index = ( (x_min < x_slice) & (x_slice < x_max) & (y_min < y_slice) & (y_slice < y_max) & (z_min < z_slice) & (z_slice < z_max) )
 
     # find boundary/obstacle particles on the interface (and internal to the simulation)
-    interface_index = np.logical_and(np.logical_not(np.all(neighbour_index, axis=0)), internal_index)
+    interface_index = np.logical_and(np.logical_and(np.logical_not(np.all(neighbour_index, axis=0)), internal_index), range_index)
     interface_vector = loc_vector[interface_index]
-    
+        
     # find unit normal to each interface particle
     normals = np.zeros_like(interface_vector, dtype=float)
     for i in range(0, len(interface_vector)):
@@ -391,12 +393,12 @@ def __seismic_sph_interfaces(boundary_vector, obstacle_vector, delta=0.01, xrang
     
     # find the effective surface area of each particle on the interface
     effective_area = delta**2 * (np.abs(normals[:, 0]) + np.abs(normals[:, 1]) + np.abs(normals[:, 2]))
-    
+        
     return interface_index, normals, effective_area
 
 
 # Define function to find particles that will collide with water--ice interfaces
-def __seismic_sph_interactions(time_vector, iter_vector, fluid_vector, boundary_vector, obstacle_vector, interface_index, normals, effective_area, filename=None, dx=0.05, dy=0.05, dz=0.05, xrange=None, yrange=None, zrange=None, boundary_layer=False):
+def __seismic_sph_interactions(time_vector, iter_vector, fluid_vector, boundary_vector, obstacle_vector, interface_index, normals, effective_area, filename=None, dx=0.05, dy=0.05, dz=0.05, xrange=None, yrange=None, zrange=None, boundary_layer=True):
     # define vectors to store collision data
     t_vector, x_vector, y_vector, z_vector, fx_vector, fy_vector, fz_vector = [], [], [], [], [], [], []
     
@@ -406,13 +408,10 @@ def __seismic_sph_interactions(time_vector, iter_vector, fluid_vector, boundary_
     z_slice = np.concatenate([boundary_vector[0].z, obstacle_vector[0].z])[interface_index]
     loc_interface = np.column_stack((x_slice, y_slice, z_slice))
     
-    # define restricted range for computational efficiency
-    range_index = __range_restriction(0., x_slice, y_slice, z_slice, xrange=xrange, yrange=yrange, zrange=zrange)
-
     # define bounds of coarse(r) cartesian grid
-    min_x, max_x = int((np.min(x_slice[range_index]) + dx/2)//dx), int((np.max(x_slice[range_index]) + dx/2)//dx)
-    min_y, max_y = int((np.min(y_slice[range_index]) + dy/2)//dy), int((np.max(y_slice[range_index]) + dy/2)//dy)
-    min_z, max_z = int((np.min(z_slice[range_index]) + dz/2)//dz), int((np.max(z_slice[range_index]) + dz/2)//dz)
+    min_x, max_x = int((np.min(x_slice) + dx/2)//dx), int((np.max(x_slice) + dx/2)//dx)
+    min_y, max_y = int((np.min(y_slice) + dy/2)//dy), int((np.max(y_slice) + dy/2)//dy)
+    min_z, max_z = int((np.min(z_slice) + dz/2)//dz), int((np.max(z_slice) + dz/2)//dz)
     
     # define grid of effective areas and unit normals
     area_grid = np.zeros((max_x - min_x + 1, max_y - min_y + 1, max_z - min_z + 1))
@@ -421,9 +420,9 @@ def __seismic_sph_interactions(time_vector, iter_vector, fluid_vector, boundary_
     nz_grid = np.zeros((max_x - min_x + 1, max_y - min_y + 1, max_z - min_z + 1))
 
     # find location of each interface particle in coarse(r) cartesian grid
-    x_index = ((x_slice[range_index] + dx/2)//dx - min_x).astype(int)
-    y_index = ((y_slice[range_index] + dy/2)//dy - min_y).astype(int)
-    z_index = ((z_slice[range_index] + dz/2)//dz - min_z).astype(int)
+    x_index = ((x_slice + dx/2)//dx - min_x).astype(int)
+    y_index = ((y_slice + dy/2)//dy - min_y).astype(int)
+    z_index = ((z_slice + dz/2)//dz - min_z).astype(int)
     
     # select a random interface particle for each location in the coarse(r) grid
     loc_unique, inverse = np.unique(np.column_stack((x_index, y_index, z_index)), axis=0, return_inverse=True)
@@ -431,9 +430,7 @@ def __seismic_sph_interactions(time_vector, iter_vector, fluid_vector, boundary_
     for j in range(0, len(loc_unique)):
         # select a random particle
         loc_random[j] = np.random.choice(np.flatnonzero(inverse == j))
-    #random_index = np.zeros(len(interface_index), dtype=int)
-    #(random_index[interface_index])[loc_random] = 1
-
+    
     # fine total area of interface particles and average unit normal for each grid point
     np.add.at(area_grid, (x_index, y_index, z_index), effective_area)
     np.add.at(nx_grid, (x_index, y_index, z_index), normals[:, 0])
@@ -448,7 +445,7 @@ def __seismic_sph_interactions(time_vector, iter_vector, fluid_vector, boundary_
 
         # find pressure and force vector of boundary/obstacle particle
         p_slice = __seismic_sph_pressure(loc_random, x_slice, y_slice, z_slice, fluid_vector[i], loc_interface, boundary_layer=boundary_layer, xrange=xrange, yrange=yrange, zrange=zrange)
-                
+        
         # add grid locations and forces to output lists
         t_vector.extend([time_vector[i]] * len(loc_unique[:, 0]))
         x_vector.extend((loc_unique[:, 0] + min_x) * dx)
@@ -457,7 +454,7 @@ def __seismic_sph_interactions(time_vector, iter_vector, fluid_vector, boundary_
         fx_vector.extend(p_slice * nx_grid[loc_unique[:, 0], loc_unique[:, 1], loc_unique[:, 2]] * area_grid[loc_unique[:, 0], loc_unique[:, 1], loc_unique[:, 2]])
         fy_vector.extend(p_slice * ny_grid[loc_unique[:, 0], loc_unique[:, 1], loc_unique[:, 2]] * area_grid[loc_unique[:, 0], loc_unique[:, 1], loc_unique[:, 2]])
         fz_vector.extend(p_slice * nz_grid[loc_unique[:, 0], loc_unique[:, 1], loc_unique[:, 2]] * area_grid[loc_unique[:, 0], loc_unique[:, 1], loc_unique[:, 2]])
-
+        
         # remove current time step and read-in one extra time step
         fluid_vector[i-1] = None
         fluid_vector, boundary_vector, obstacle_vector = __seismic_sph_particles(time_vector, iter_vector, fluid_vector, boundary_vector, obstacle_vector, filename=filename, start=i+buff-1, buffer=1)
@@ -474,21 +471,8 @@ def __seismic_sph_pressure(loc_random, x_slice, y_slice, z_slice, fluid_vector, 
     
     # build a KD tree for the fluid particles
     range_index = __range_restriction(h, fluid_vector.x, fluid_vector.y, fluid_vector.z, xrange=xrange, yrange=yrange, zrange=zrange)
-    fluid_tree = cKDTree(np.column_stack((fluid_vector.x[range_index], fluid_vector.y[range_index], fluid_vector.z[range_index])))
-    
-    # remove fluid particles within a kernel of boundary (i.e., most susceptible to numerical noise)
-    if boundary_layer == False:
-        boundary_particle = np.zeros_like(fluid_vector.x, dtype=bool)
-        
-        for idx in range(0, len(loc_interface)):
-            # find neighbours within smoothing radius
-            nbrs = fluid_tree.query_ball_point([x_slice[idx], y_slice[idx], z_slice[idx]], r_kern)
-            
-            if len(nbrs) == 0:
-                continue
-            # flag particles within kernel radius of interface
-            for j in nbrs:
-                boundary_particle[j] = 1
+    valid_indices = np.flatnonzero(range_index)
+    fluid_tree = cKDTree(np.column_stack((fluid_vector.x[valid_indices], fluid_vector.y[valid_indices], fluid_vector.z[valid_indices])))
     
     p_interface = np.zeros(len(loc_random))
     for k, idx in enumerate(loc_random):
@@ -504,16 +488,17 @@ def __seismic_sph_pressure(loc_random, x_slice, y_slice, z_slice, fluid_vector, 
         
         # calculate weighted pressure of fluid particles within smoothing radius (but not in boundary layer)
         for j in nbrs:
-            dx = fluid_vector.x[j] - x_slice[idx]
-            dy = fluid_vector.y[j] - y_slice[idx]
-            dz = fluid_vector.z[j] - z_slice[idx]
+            global_j = valid_indices[j]
+
+            dx = fluid_vector.x[global_j] - x_slice[idx]
+            dy = fluid_vector.y[global_j] - y_slice[idx]
+            dz = fluid_vector.z[global_j] - z_slice[idx]
             r = np.sqrt(dx*dx + dy*dy + dz*dz)
 
             # apply weight to particles
-            if boundary_layer or boundary_particle[j] == 0:
-                w = 1.
-                p_sum += fluid_vector.p[j] * w
-                w_sum += w
+            w = 1.
+            p_sum += fluid_vector.p[global_j] * w
+            w_sum += w
             if r < r_kern:
                 particle_within_kernel = True
 
@@ -543,17 +528,12 @@ def __range_restriction(h, x_slice, y_slice, z_slice, xrange=None, yrange=None, 
 def ___seismic_sph_pressure(interface_index, fluid_vector, boundary_vector, obstacle_vector):
     
     # define kernel dimension
-    #kernel = WendlandQuintic(dim=dim)
     h = fluid_vector.h[0]
     r_kern = 2 * h
     r_smooth = 5 * h
     
     # force pysph linked list to consider more distant particles
     fluid_vector.h[:], boundary_vector.h[:], obstacle_vector.h[:] = r_smooth, r_smooth, r_smooth
-    
-    # apply kernel to smooth the pressure of the fluid particles
-    #p_fluid = __seismic_sph_kernel(fluid_vector, fluid_vector, r_cut, h)
-    #fluid_vector.p = p_fluid
     
     # apply kernel to nearest neighbours to interface particles
     p_boundary = __seismic_sph_kernel(fluid_vector, boundary_vector, r_kern, r_smooth, interface_index[:len(boundary_vector.x)])
@@ -689,13 +669,6 @@ def seismic_sph_forces(x0, y0, z0, filename=None, dx=0.1, dy=0.1, dz=0.1, averag
         fz_detrended[:,:,:,:] = fz_detrended[:,:,:,:] - fz_detrended[0,:,:,:][None,:,:,:]
     else:
         fx_detrended, fy_detrended, fz_detrended = fx_grid, fy_grid, fz_grid
-    #if f_cutoff > 0:
-        # typical instrument response function
-    #    b, a = butter(2, f_cutoff / (0.5 * (1. / dt)), btype='high')
-    #    w = 0.5 * (1 - np.cos(np.pi * (t_unique - t_unique[0]) / (t_unique[-1] - t_unique[0])))
-    #    fx_detrended = w[:,None,None,None] * lfilter(b, a, fx_detrended, axis=0) + (1 - w[:,None,None,None]) * lfilter(b, a, fx_detrended[::-1], axis=0)[::-1]
-    #    fy_detrended = w[:,None,None,None] * lfilter(b, a, fy_detrended, axis=0) + (1 - w[:,None,None,None]) * lfilter(b, a, fy_detrended[::-1], axis=0)[::-1]
-    #    fz_detrended = w[:,None,None,None] * lfilter(b, a, fz_detrended, axis=0) + (1 - w[:,None,None,None]) * lfilter(b, a, fz_detrended[::-1], axis=0)[::-1]
     
     # add non-zero grid points to vector outputs
     f_detrended = np.sqrt(fx_detrended**2 + fy_detrended**2 + fz_detrended**2)
@@ -868,29 +841,10 @@ def earth_model(layers):
 
 
 ## Define custom functions for analysis in Turner et al. (2026)
-# Default analysis for high-resolution waveforms
 def seismic_sph_forces_defaults(x0, y0, z0, filename):
     
     # define size of reduced grid
     dx, dy, dz = 0.1, 0.1, 0.1
-    
-    # calculate force database (apply low pass filter to grid cell occupied by initial fluid)
-    forces_df = seismic_sph_forces(x0, y0, z0, filename='{}'.format(filename), dx=dx, dy=dy, dz=dz, \
-                                  average_height=True, crit_force=1e-3, f_cutoff=0)
-
-    # exclude straight sections of channel away from collision site
-    forces_df = forces_df[np.logical_and(-1.001 <= forces_df['loc_1'], forces_df['loc_1'] <= 1.001)].reset_index(drop=True)
-    
-    # remove vertical component of force (should be net zero)
-    forces_df['force_3'] = 0
-    
-    return forces_df
-    
-# Default analysis for low-resolution surface maps
-def seismic_sph_forces_defaults_coarse(x0, y0, z0, filename):
-    
-    # define size of reduced grid
-    dx, dy, dz = 2., 2., 2.
     
     # calculate force database (apply low pass filter to grid cell occupied by initial fluid)
     forces_df = seismic_sph_forces(x0, y0, z0, filename='{}'.format(filename), dx=dx, dy=dy, dz=dz, \
