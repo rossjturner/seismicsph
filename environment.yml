@@ -1,0 +1,15 @@
+name: hyglac
+channels:
+  - conda-forge
+dependencies:
+  - python=3.9
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - h5py
+  - jupyter
+  - pip
+  - pip:
+      - pysph==1.0a6
+      - pyprop8==1.1.5
