@@ -1,4 +1,3 @@
-
 # hyglac
 
 Hyglac is a Python package for smoothed particle hydrodynamic simulations, calculation of dynamic pressure forces at fluid–solid interfaces, and seismic wave propagation, as described by Turner et al. (2026), in press. These three components can be used independently to simulate fluid flows, extract time-dependent forces from existing hydrodynamic simulations, or calculate synthetic seismic waveforms from prescribed force distributions.
@@ -20,6 +19,10 @@ The second step would in practice be run after the previous step, but can be run
 The final step in the workflow is the generation of seismic waves from the interaction data calculated in the previous step. The *seismic_sph_forces* function in the *hyglac.py* module combines the forces on a coarser spatial grid for computational efficiency, returning a *pandas* dataframe. The *seismic_sph_forces_defaults* function applies the settings used in Turner et al. (2026), including the exclusion of the vertical force component.
 
 The location of a mock seismometer relative to the computational domain must be specified, in addition to the sample rate, duration and seismic velocity structure. The *earth_model* function defines the layered seismic velocity structure, while the *seismic_signals* function uses *pyprop8* to generate three-component displacement and velocity waveforms, returning a *pandas* dataframe. This function can be run for a range of seismometer locations around the channel to generate the suite of figures presented in Turner et al. (2026).
+
+## Test case
+
+The [`seismicsph_testcase.ipynb`](testcase/seismicsph_testcase.ipynb) notebook demonstrates the complete workflow and provides a computationally inexpensive test to verify that the code runs as expected. The simulation parameters are chosen to minimise runtime and output file sizes, allowing reference outputs to be included in the [`testcase/`](testcase/) directory for comparison. These parameters are not intended to be physically realistic, and the resulting outputs should not be interpreted as scientifically validated predictions.
 
 ## Contact
 
